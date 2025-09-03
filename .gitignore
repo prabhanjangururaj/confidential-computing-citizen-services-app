@@ -3,6 +3,9 @@
 .env*
 fortanix-dsm.env
 
+# Claude Code settings
+.claude/
+
 # Dependencies
 node_modules/
 
