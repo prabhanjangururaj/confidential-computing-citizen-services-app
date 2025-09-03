@@ -1,0 +1,263 @@
+# Enterprise HR Management System - Complete 3-Tier Application
+# Optimized single container for Azure Confidential ACI (<3GB)
+
+# Stage 1: Build React Frontend (Tier 1)
+FROM --platform=linux/amd64 node:18-alpine AS frontend-builder
+WORKDIR /build/frontend
+COPY frontend/package*.json ./
+RUN npm install --omit=dev --ignore-scripts
+COPY frontend/ ./
+RUN npm run build && \
+    du -sh build && \
+    echo "✅ Frontend build completed"
+
+# Stage 2: Prepare Backend Dependencies (Tier 2) 
+FROM --platform=linux/amd64 node:18-alpine AS backend-builder
+WORKDIR /build/backend
+
+# Install build tools for native modules (sqlite3)
+RUN apk add --no-cache python3 python3-dev make g++ sqlite-dev py3-pip && \
+    python3 -m pip install --break-system-packages setuptools && \
+    echo "✅ Build tools installed"
+
+COPY backend/package*.json ./
+RUN npm install --omit=dev && \
+    du -sh node_modules && \
+    echo "✅ Backend dependencies installed (SQLite native modules compiled)"
+
+# Stage 3: Production Container - All 3 Tiers
+FROM --platform=linux/amd64 node:18-alpine AS production
+
+# Install system packages for all tiers (including sqlite for runtime)
+RUN apk add --no-cache \
+    nginx \
+    supervisor \
+    curl \
+    tzdata \
+    sqlite && \
+    rm -rf /var/cache/apk/* && \
+    echo " System packages installed"
+
+# Create application directory
+WORKDIR /app
+
+# Copy Tier 1 (Presentation) - Built React app
+COPY --from=frontend-builder /build/frontend/build /usr/share/nginx/html/
+RUN echo " Tier 1 (Frontend) files copied"
+
+# Copy Tier 2 (Business Logic) - Node.js API
+COPY --from=backend-builder /build/backend/node_modules ./backend/node_modules/
+COPY backend/ ./backend/
+COPY fortanix-dsm.env ./backend/.env
+
+# Create certificate directory for runtime certificates (CCM provides app_public.pem and app_private.pem at runtime)
+RUN mkdir -p /opt/fortanix/enclave-os/default_cert
+
+RUN chmod +x ./backend/server.js && \
+    echo " Tier 2 (API) files copied" && \
+    echo "🔐 Fortanix DSM configuration included in container" && \
+    echo "📜 Runtime certificates will be provided by CCM in confidential computing environment"
+
+# Tier 3 (Data Layer) will be initialized by the API on startup
+
+# Configure Nginx (Tier 1 Web Server)
+RUN rm /etc/nginx/http.d/default.conf
+COPY <<EOF /etc/nginx/http.d/hr-system.conf
+server {
+    listen 80;
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Security headers
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Referrer-Policy "strict-origin-when-cross-origin";
+
+    # Serve React app
+    location / {
+        try_files \$uri \$uri/ /index.html;
+        expires 1h;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # API proxy to Node.js backend (Tier 2)
+    location /api {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # Health check
+    location /health {
+        access_log off;
+        return 200 "Springfield City Services - All Tiers Operational\\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Block sensitive files
+    location ~ /\\.  { deny all; }
+    location ~ \\.(env|log|db)\$ { deny all; }
+}
+EOF
+
+# Configure Supervisor to orchestrate all services
+COPY <<EOF /etc/supervisor/conf.d/hr-system.conf
+[supervisord]
+nodaemon=true
+user=root
+logfile=/var/log/supervisor/supervisord.log
+pidfile=/var/run/supervisord.pid
+childlogdir=/var/log/supervisor/
+
+[program:nginx]
+command=nginx -g "daemon off;"
+autostart=true
+autorestart=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+priority=100
+
+[program:hr-api]
+command=node /app/backend/server.js
+directory=/app/backend
+autostart=true
+autorestart=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+environment=NODE_ENV=production,PORT=3001
+priority=200
+
+[program:startup-banner]
+command=/app/startup-banner.sh
+autostart=true
+autorestart=false
+startsecs=0
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+priority=50
+EOF
+
+# Create startup banner script
+COPY <<EOF /app/startup-banner.sh
+#!/bin/sh
+echo ""
+echo "████████████████████████████████████████████████████████████████"
+echo "██                                                            ██"
+echo "██        🏛️ SPRINGFIELD CITY SERVICES v1.0                ██"
+echo "██                                                            ██"
+echo "██     🎯 Enterprise 3-Tier Application                       ██"
+echo "██     🔒 Confidential Computing Ready                        ██"
+echo "██     🚀 Single Container Architecture                       ██"
+echo "██                                                            ██"
+echo "████████████████████████████████████████████████████████████████"
+echo ""
+echo "🏗️  Architecture Overview:"
+echo "   📱 Tier 1 (Presentation): Nginx + React Frontend"
+echo "   ⚙️  Tier 2 (Business Logic): Node.js Express API"  
+echo "   💾 Tier 3 (Data Layer): SQLite Database"
+echo ""
+echo "🌐 Access Points:"
+echo "   Frontend:    http://localhost:80"
+echo "   API:         http://localhost:80/api"
+echo "   Health:      http://localhost:80/health"
+echo ""
+echo "🛡️  Security Features:"
+echo "   ✓ Helmet.js security headers"
+echo "   ✓ CORS protection"
+echo "   ✓ Rate limiting"
+echo "   ✓ Input validation"
+echo "   ✓ SQL injection prevention"
+echo ""
+echo "🏛️ Sample Data:"
+echo "   ✓ 10 citizens registered"
+echo "   ✓ 6 government agencies"
+echo "   ✓ 10 service types available"
+echo "   ✓ Active service requests"
+echo ""
+echo "🚀 Starting all services..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+EOF
+
+RUN chmod +x /app/startup-banner.sh
+
+# Create log directories
+RUN mkdir -p /var/log/nginx /var/log/supervisor && \
+    touch /var/log/nginx/access.log /var/log/nginx/error.log
+
+# Health check script
+COPY <<EOF /app/healthcheck.sh
+#!/bin/sh
+# Check if all services are running
+nginx_status=\$(curl -f -s http://localhost/health > /dev/null && echo "ok" || echo "fail")
+api_status=\$(curl -f -s http://localhost/api/health > /dev/null && echo "ok" || echo "fail")
+
+if [ "\$nginx_status" = "ok" ] && [ "\$api_status" = "ok" ]; then
+    echo "All services healthy"
+    exit 0
+else
+    echo "Health check failed - Nginx: \$nginx_status, API: \$api_status"
+    exit 1
+fi
+EOF
+
+RUN chmod +x /app/healthcheck.sh
+
+# Set environment variables for production
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV TZ=UTC
+
+# Fortanix DSM configuration loaded from .env file
+
+# Create non-root user for security
+RUN addgroup -S hrapp && adduser -S hrapp -G hrapp && \
+    chown -R hrapp:hrapp /app/backend
+
+# Expose port 80 for the complete application
+EXPOSE 80
+
+# Health check for container orchestration
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD /app/healthcheck.sh
+
+# Container metadata
+LABEL name="hr-management-system" \
+      version="1.0.0" \
+      description="Enterprise HR Management System - 3-Tier Architecture" \
+      architecture="3-tier" \
+      tiers="nginx+react,nodejs+express,sqlite" \
+      maintainer="Enterprise Demo" \
+      confidential-computing="ready"
+
+# Final size optimization
+RUN npm cache clean --force 2>/dev/null || true && \
+    rm -rf /tmp/* /var/tmp/* /root/.npm && \
+    find /app -name "*.map" -delete && \
+    echo "✅ Container optimized"
+
+# Print final container info
+RUN echo "📊 Final Container Stats:" && \
+    echo "   Size: $(du -sh / 2>/dev/null | cut -f1 || echo 'calculating...')" && \
+    echo "   Tiers: Frontend (Nginx+React) + API (Node.js) + Database (SQLite)" && \
+    echo "   Ready for Azure Confidential ACI deployment" && \
+    echo "✅ Build complete!"
+
+# Start all services with supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/hr-system.conf"]
