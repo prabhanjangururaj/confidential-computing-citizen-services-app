@@ -48,17 +48,17 @@ A complete citizen services management application demonstrating modern governme
 **🏗️ API Key Authentication:**
 ```env
 FORTANIX_AUTH_METHOD=api_key
-FORTANIX_DSM_ENDPOINT=https://amer.smartkey.io
-FORTANIX_KEY_ID=6ebb-6ebb-6ebb-6ebb
-FORTANIX_API_KEY=MTU3ZDA3YmYtNMTU3ZDA3YmYtNMTU3ZDA3YmYtNMTU3ZDA3YmYtN...
+FORTANIX_DSM_ENDPOINT=
+FORTANIX_KEY_ID=
+FORTANIX_API_KEY=
 ```
 
 **🛡️ Trusted CA Authentication (Confidential Computing):**
 ```env
-FORTANIX_AUTH_METHOD=trusted_ca
-APP_FORTANIX_DSM_ENDPOINT=https://apps.amer.smartkey.io
-FORTANIX_KEY_ID=6ebb-6ebb-6ebb-6ebb
-FORTANIX_APP_ID=0f7385f7-6ebb-6ebb-6ebb-0f7385f7
+FORTANIX_AUTH_METHOD=
+APP_FORTANIX_DSM_ENDPOINT=
+FORTANIX_KEY_ID=
+FORTANIX_APP_ID=
 ```
 
 **🔐 Authentication Flow Details:**
