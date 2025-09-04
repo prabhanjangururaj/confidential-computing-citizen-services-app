@@ -1,4 +1,4 @@
-# Confidential Computing Citizen Services App
+# Citizen Services App
 ## Enterprise 3-Tier Application with Hardware-Backed Encryption
 
 A complete citizen services management application demonstrating modern government digital services with **enterprise-grade application-level encryption** using Fortanix Data Security Manager (DSM) and Fortanix Confidential Computing Manager (CCM)
